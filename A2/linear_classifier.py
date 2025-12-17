@@ -168,8 +168,13 @@ def svm_loss_naive(
                 # computing the derivative, it is simple to compute the derivative    #
                 # at the same time that the loss is being computed.                   #
                 #######################################################################
-                # Replace "pass" statement with your code
-                pass
+                
+                # L_i = sum_{j!=y_i} max(0, s_j - s_{y_i} + 1), s_j = W_j^T x_i, margin = s_j - s_{y_i} + 1
+                # => dL_i/dW_j = 1{if margin > 0 else 0} * x_i
+                # => dL_i/dW_{y_i} = - (sum_{j!=y_i} 1{if margin > 0 else 0}) * x_i
+                dW[:, j] += X[i]    # Add X[i] to column j, i.e. dL_i/dW_j
+                dW[:, y[i]] -= X[i] # Subtract X[i] from the correct class column, i.e. dL_i/dW_{y_i}
+
                 #######################################################################
                 #                       END OF YOUR CODE                              #
                 #######################################################################
@@ -186,8 +191,12 @@ def svm_loss_naive(
     # Compute the gradient of the loss function w.r.t. the regularization term  #
     # and add it to dW. (part 2)                                                #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    # L = (1/N) sum_i L_i + reg * sum W^2
+    # => dL/dW = (1/N) sum_i dL_i/dW + 2 * reg * W
+    dW /= num_train   # Average over number of training samples
+    dW += 2 * reg * W # Add gradient of regularization term
+
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################
@@ -222,8 +231,16 @@ def svm_loss_vectorized(
     # Implement a vectorized version of the structured SVM loss, storing the    #
     # result in loss.                                                           #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    N = X.shape[0]
+    scores = X.mm(W) # [N, C]
+    idx_samples = torch.arange(N)
+    correct_class_scores = scores[idx_samples, y].reshape(N, 1)
+    margin = scores - correct_class_scores + 1 # [N, C]
+    margin[margin < 0] = 0
+    margin[idx_samples, y] = 0
+    loss = torch.sum(margin)/N + reg*torch.sum(W*W) # scalar
+
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################
@@ -237,8 +254,40 @@ def svm_loss_vectorized(
     # to reuse some of the intermediate values that you used to compute the     #
     # loss.                                                                     #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    # # torch.nonzero(x: Tensor)返回一个形状为(Z, x.dim())的张量，Z为x中非零元素的个数，每一行表示一个非零元素的坐标(i, j, ...)
+    # # 对返回的张量进行转置后，第一行表示非零元素的行索引，第二行表示非零元素的列索引，以此类推
+    # i, j = torch.nonzero(margin).t() # i: margin的行索引，即样本索引； j: margin的列索引，即类别索引
+    # dW[:, j] += X[i].t()
+    # dW[:, y[i]] -= X[i].t()
+    # dW = dW/N + 2*reg*W
+
+    # 上面的方法有问题：高级索引的 += 操作无法原地更新
+    # 在 PyTorch 中，使用包含张量的索引（如 dW[:, j]）属于“高级索引”（Advanced Indexing）。高级索引会返回数据的副本（copy），而不是视图（view）。
+    # 因此，代码 dW[:, j] += X[i].t() 实际上是在修改这个副本，原始的 dW 张量并没有被更新。
+
+
+    # 另一种思路：利用矩阵乘法一次性计算梯度
+    # 创建一个掩码，margin > 0 的位置为 1
+    binary = torch.zeros_like(margin)
+    binary[margin > 0] = 1
+    
+    # 对于 j != y_i，梯度是 x_i (如果 margin > 0)
+    # 对于 j == y_i，梯度是 - (margin > 0 的次数) * x_i
+    
+    # 计算每个样本有多少个类别的 margin > 0
+    row_sum = torch.sum(binary, dim=1)
+    
+    # 更新正确类别的系数
+    binary[torch.arange(N), y] = -row_sum
+    
+    # 利用矩阵乘法一次性计算梯度: dW = X^T * binary
+    dW = X.t().mm(binary)
+    
+    # 平均 + 正则化
+    dW /= N
+    dW += 2 * reg * W
+
     #############################################################################
     #                             END OF YOUR CODE                              #
     #############################################################################
@@ -262,8 +311,11 @@ def sample_batch(
     #                                                                       #
     # Hint: Use torch.randint to generate indices.                          #
     #########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    idx = torch.randint(num_train, size=(batch_size,))
+    X_batch = X[idx, :]
+    y_batch = y[idx]
+
     #########################################################################
     #                       END OF YOUR CODE                                #
     #########################################################################
@@ -330,8 +382,9 @@ def train_linear_classifier(
         # TODO:                                                                 #
         # Update the weights using the gradient and the learning rate.          #
         #########################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        W -= learning_rate * grad
+
         #########################################################################
         #                       END OF YOUR CODE                                #
         #########################################################################
@@ -361,8 +414,9 @@ def predict_linear_classifier(W: torch.Tensor, X: torch.Tensor):
     # TODO:                                                                   #
     # Implement this method. Store the predicted labels in y_pred.            #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    y_pred = X.mm(W).argmax(dim=1).to(torch.int64)
+
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -387,8 +441,10 @@ def svm_get_search_params():
     ###########################################################################
     # TODO:   add your own hyper parameter lists.                             #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    learning_rates = [5e-3, 7.5e-3, 1e-2]
+    regularization_strengths = [1e-3, 3e-3, 5e-3]
+
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -439,8 +495,19 @@ def test_one_param_set(
     # and don't forget to remove this line before submitting your final version
     # num_iters = 100
 
-    # Replace "pass" statement with your code
-    pass
+    cls.train(
+        data_dict["X_train"],
+        data_dict["y_train"],
+        learning_rate=lr,
+        reg=reg,
+        num_iters=num_iters,
+        verbose=False,
+    )
+    y_train_pred = cls.predict(data_dict["X_train"])
+    y_val_pred = cls.predict(data_dict["X_val"])
+    train_acc = torch.mean((y_train_pred == data_dict["y_train"]).to(torch.float32)).item()
+    val_acc = torch.mean((y_val_pred == data_dict["y_val"]).to(torch.float32)).item()
+
     ############################################################################
     #                            END OF YOUR CODE                              #
     ############################################################################
