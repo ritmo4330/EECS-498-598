@@ -553,8 +553,22 @@ def softmax_loss_naive(
     # in http://cs231n.github.io/linear-classify/). Plus, don't forget the      #
     # regularization!                                                           #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    N = X.shape[0]
+    scores = X.mm(W)
+    stable_scores = scores - scores.max(dim=1, keepdim=True).values # 每一行减去该行的最大值，即使scores每一行的最大值为0，避免出现exp(score)过大导致的数值不稳定
+    for i in range(N):
+        exp_sum = torch.exp(stable_scores[i]).sum()
+        loss += - stable_scores[i, y[i]] + torch.log(exp_sum)
+        dW[:, y[i]] -= X[i]
+        for j in range(W.shape[1]):
+            dW[:, j] += (torch.exp(stable_scores[i, j]) / exp_sum) * X[i]
+    
+    loss /= N
+    loss += reg * torch.sum(W * W)
+    dW /= N
+    dW += 2 * reg * W
+
     #############################################################################
     #                          END OF YOUR CODE                                 #
     #############################################################################
@@ -583,8 +597,18 @@ def softmax_loss_vectorized(
     # in http://cs231n.github.io/linear-classify/). Don't forget the            #
     # regularization!                                                           #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    N = X.shape[0]
+    scores = X.mm(W)
+    stable_scores = scores - scores.max(dim=1, keepdim=True).values # (N, C)
+    idx_samples = torch.arange(N)
+    exp_sum = torch.exp(stable_scores).sum(dim=1, keepdim=True)
+    p = torch.exp(stable_scores) / exp_sum # (N, C)
+    loss = - torch.sum(torch.log(p[idx_samples, y]))
+    loss = loss/N + reg*torch.sum(W*W)
+    p[idx_samples, y] -= 1
+    dW = X.t().mm(p)/N + 2*reg*W # (D, C)
+
     #############################################################################
     #                          END OF YOUR CODE                                 #
     #############################################################################
@@ -612,8 +636,10 @@ def softmax_get_search_params():
     # different hyperparameters to achieve good performance with the softmax  #
     # classifier.                                                             #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    learning_rates = [3e-2, 5.625e-2, 8e-2]
+    regularization_strengths = [3e-4, 6e-4, 9e-4]
+
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################

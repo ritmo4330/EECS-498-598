@@ -146,8 +146,11 @@ def nn_forward_pass(params: Dict[str, torch.Tensor], X: torch.Tensor):
     # Store the result in the scores variable, which should be an tensor of    #
     # shape (N, C).                                                            #
     ############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    hidden = X.mm(W1) + b1
+    hidden[hidden <= 0] = 0
+    scores = hidden.mm(W2) + b2
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -211,8 +214,14 @@ def nn_forward_backward(
     # If you are not careful here, it is easy to run into numeric instability  #
     # (Check Numeric Stability in http://cs231n.github.io/linear-classify/).   #
     ############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    stable_scores = scores - scores.max(dim=1, keepdim=True).values # (N, C)
+    idx_samples = torch.arange(N)
+    exp_sum = torch.exp(stable_scores).sum(dim=1, keepdim=True)
+    p = torch.exp(stable_scores) / exp_sum # (N, C)
+    loss = - torch.sum(torch.log(p[idx_samples, y]))
+    loss = loss/N + reg*torch.sum(W1*W1) + reg*torch.sum(W2*W2)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -225,8 +234,22 @@ def nn_forward_backward(
     # For example, grads['W1'] should store the gradient on W1, and be a      #
     # tensor of same size                                                     #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    # 推导见笔记`backpropagation.md`
+    p[idx_samples, y] -= 1
+    ds = p/N
+    dW2 = h1.t().mm(ds) + 2*reg*W2
+    db2 = ds.sum(dim=0)
+    Z = X.mm(W1) + b1
+    dZ = ds.mm(W2.t())
+    dZ[Z<0] = 0 # 考虑ReLU的导数影响后的dZ
+    dW1 = X.t().mm(dZ) + 2*reg*W1
+    db1 = dZ.sum(dim=0)
+    grads['W2'] = dW2
+    grads['b2'] = db2
+    grads['W1'] = dW1
+    grads['b1'] = db1
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
