@@ -235,7 +235,7 @@ def nn_forward_backward(
     # tensor of same size                                                     #
     ###########################################################################
     
-    # 推导见笔记`backpropagation.md`
+    # 推导见笔记 `backpropagation.md`
     p[idx_samples, y] -= 1
     ds = p/N
     dW2 = h1.t().mm(ds) + 2*reg*W2
@@ -329,8 +329,12 @@ def nn_train(
         # using stochastic gradient descent. You'll need to use the gradients   #
         # stored in the grads dictionary defined above.                         #
         #########################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        params['W1'] -= grads['W1'] * learning_rate
+        params['W2'] -= grads['W2'] * learning_rate
+        params['b1'] -= grads['b1'] * learning_rate
+        params['b2'] -= grads['b2'] * learning_rate
+
         #########################################################################
         #                             END OF YOUR CODE                          #
         #########################################################################
@@ -387,8 +391,9 @@ def nn_predict(
     ###########################################################################
     # TODO: Implement this function; it should be VERY simple!                #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    y_pred = loss_func(params, X).max(dim=1).indices
+
     ###########################################################################
     #                              END OF YOUR CODE                           #
     ###########################################################################
@@ -421,8 +426,12 @@ def nn_get_search_params():
     # different hyperparameters to achieve good performance with the softmax  #
     # classifier.                                                             #
     ###########################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    learning_rates = [6e-1]
+    hidden_sizes = [512]
+    regularization_strengths = [7e-5, 9e-5, 1.1e-4]
+    learning_rate_decays = [0.85, 0.82]
+
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -482,8 +491,43 @@ def find_best_net(
     # to write code to sweep through possible combinations of hyperparameters   #
     # automatically like we did on the previous exercises.                      #
     #############################################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    best_lr = None
+    best_hs = None
+    best_reg = None
+    best_lrd = None
+
+    learning_rates, hidden_sizes, regularization_strengths, learning_rate_decays = get_param_set_fn()
+    X_train, y_train = data_dict['X_train'], data_dict['y_train']
+    X_val, y_val = data_dict['X_val'], data_dict['y_val']
+    input_size = X_train.shape[1]
+    output_size = torch.max(y_train).item() + 1
+    for lr in learning_rates:
+        for hs in hidden_sizes:
+            for reg in regularization_strengths:
+                for lrd in learning_rate_decays:
+                    net = TwoLayerNet(input_size, hs, output_size, device=X_train.device)
+                    stat = net.train(
+                        X_train, y_train, X_val, y_val,
+                        learning_rate=lr,
+                        learning_rate_decay=lrd,
+                        reg=reg,
+                        num_iters=2000,
+                        batch_size=200,
+                        verbose=False,
+                    )
+                    val_acc = stat['val_acc_history'][-1]
+                    if val_acc > best_val_acc:
+                        best_val_acc = val_acc
+                        best_net = net
+                        best_stat = stat
+                        best_lr = lr
+                        best_hs = hs
+                        best_reg = reg
+                        best_lrd = lrd
+
+    print(f'Best lr: {best_lr}, hs: {best_hs}, reg: {best_reg}, lrd: {best_lrd}, val_acc: {best_val_acc}')
+
     #############################################################################
     #                               END OF YOUR CODE                            #
     #############################################################################
