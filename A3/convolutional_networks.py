@@ -50,8 +50,43 @@ class Conv(object):
         # Hint: you can use function torch.nn.functional.pad for padding.  #
         # You are NOT allowed to use anything in torch.nn in other places. #
         ####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        pad = conv_param['pad']
+        stride = conv_param['stride']
+        N, C, H, W = x.shape
+        F, _, HH, WW = w.shape
+        H_out = 1 + (H + 2 * pad - HH) // stride
+        W_out = 1 + (W + 2 * pad - WW) // stride
+        
+        # 1. Padding
+        x_padded = torch.nn.functional.pad(x, (pad, pad, pad, pad))
+        
+        # 2. 使用 unfold 提取滑动窗口 (im2col)
+        # x_padded: (N, C, H_pad, W_pad)
+        # 展开 H 维度 -> (N, C, H_out, W_pad, HH)
+        # 展开 W 维度 -> (N, C, H_out, W_out, HH, WW)
+        x_windows = x_padded.unfold(2, HH, stride).unfold(3, WW, stride)
+        
+        # 3. 调整维度以便进行矩阵乘法
+        # 目标: 将所有空间位置和 Batch 展平为矩阵的行，将卷积核展平为矩阵的列
+        # 变换为: (N, H_out, W_out, C, HH, WW)
+        x_windows = x_windows.permute(0, 2, 3, 1, 4, 5).contiguous()
+        # 展平为: (N * H_out * W_out, C * HH * WW)
+        x_cols = x_windows.view(-1, C * HH * WW)
+        
+        # 4. 权重 Reshape
+        # w: (F, C, HH, WW) -> (F, C * HH * WW) -> 转置为 (C * HH * WW, F)
+        w_cols = w.view(F, -1).t()
+        
+        # 5. 矩阵乘法与偏置相加
+        # (Matrix Mul): (N*H*W, Din) @ (Din, F) -> (N*H*W, F)
+        # 广播机制会自动将 b 加到每一行
+        out = torch.matmul(x_cols, w_cols) + b
+        
+        # 6. 恢复输出形状
+        # (N * H_out * W_out, F) -> (N, H_out, W_out, F) -> (N, F, H_out, W_out)
+        out = out.view(N, H_out, W_out, F).permute(0, 3, 1, 2).contiguous()
+        
         #####################################################################
         #                          END OF YOUR CODE                         #
         #####################################################################
@@ -75,8 +110,85 @@ class Conv(object):
         ###############################################################
         # TODO: Implement the convolutional backward pass.            #
         ###############################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        
+        # 1. 获取前向传播时的缓存数据
+        x, w, b, conv_param = cache
+        pad = conv_param['pad']
+        stride = conv_param['stride']
+        
+        # 获取维度信息
+        N, C, H, W = x.shape
+        F, _, HH, WW = w.shape
+        # 计算输出特征图的尺寸
+        H_out = 1 + (H + 2 * pad - HH) // stride
+        W_out = 1 + (W + 2 * pad - WW) // stride
+
+        # 2. 准备工作：Padding
+        # 为了处理边界，先对输入 x 进行填充，恢复成前向传播时的样子
+        x_padded = torch.nn.functional.pad(x, (pad, pad, pad, pad))
+        # 初始化 dx_padded，用于累加梯度（因为卷积核是滑动的，一个像素可能参与多次计算）
+        dx_padded = torch.zeros_like(x_padded)
+
+        # 3. im2col (Image to Column) 变换：将卷积转化为矩阵乘法
+        # 使用 unfold 提取所有滑动窗口
+        # x_padded: (N, C, H_pad, W_pad)
+        # 展开后: (N, C, H_out, W_out, HH, WW)
+        x_windows = x_padded.unfold(2, HH, stride).unfold(3, WW, stride)
+        
+        # 调整维度顺序，准备展平
+        # 目标: (N, H_out, W_out, C, HH, WW)
+        x_windows = x_windows.permute(0, 2, 3, 1, 4, 5).contiguous()
+        
+        # 展平为矩阵 x_cols
+        # 行: (N * H_out * W_out) -> 每一个样本的每一个滑动位置
+        # 列: (C * HH * WW)       -> 一个卷积核覆盖的体积（感受野）
+        x_cols = x_windows.view(-1, C * HH * WW)
+        
+        # 将权重 w 也展平为矩阵 w_cols
+        # w: (F, C, HH, WW) -> (F, C * HH * WW) -> 转置为 (C * HH * WW, F)
+        w_cols = w.view(F, -1).t()
+
+        # 4. 计算 db (偏置的梯度)
+        # 偏置 b 加在每个输出像素上，所以对 Batch(N), Height(H_out), Width(W_out) 求和
+        db = dout.sum(dim=(0, 2, 3))
+
+        # 5. 计算 dw (权重的梯度)
+        # 准备 dout: (N, F, H_out, W_out) -> (N, H_out, W_out, F) -> (N*H_out*W_out, F)
+        dout_reshaped = dout.permute(0, 2, 3, 1).contiguous().view(-1, F)
+        
+        # 矩阵乘法: dW = X^T * dOut
+        # (C*HH*WW, N*H*W) @ (N*H*W, F) -> (C*HH*WW, F)
+        dw_cols = torch.matmul(x_cols.t(), dout_reshaped)
+        
+        # 恢复形状: (C*HH*WW, F) -> (F, C*HH*WW) -> (F, C, HH, WW)
+        dw = dw_cols.t().view(F, C, HH, WW)
+
+        # 6. 计算 dx (输入的梯度)
+        # 矩阵乘法: dX_cols = dOut * W^T
+        # (N*H*W, F) @ (F, C*HH*WW) -> (N*H*W, C*HH*WW)
+        dx_cols = torch.matmul(dout_reshaped, w_cols.t())
+        
+        # col2im (Column to Image) 变换：将梯度累加回原图
+        # 先恢复成窗口形状: (N, H_out, W_out, C, HH, WW)
+        # 再调整维度以便遍历: (N, C, HH, WW, H_out, W_out)
+        dx_windows = dx_cols.view(N, H_out, W_out, C, HH, WW).permute(0, 3, 4, 5, 1, 2).contiguous()
+        
+        # 遍历所有滑动窗口位置，将梯度累加回 dx_padded
+        # 这是一个逆向的 unfold 操作
+        for i in range(H_out):
+            for j in range(W_out):
+                # 对应的输入切片位置
+                h_start = i * stride
+                h_end = h_start + HH
+                w_start = j * stride
+                w_end = w_start + WW
+                # 累加梯度
+                dx_padded[:, :, h_start:h_end, w_start:w_end] += dx_windows[:, :, :, :, i, j]
+        
+        # 7. 去掉 Padding，得到最终的 dx
+        dx = dx_padded[:, :, pad:pad+H, pad:pad+W]
+
         ###############################################################
         #                       END OF YOUR CODE                      #
         ###############################################################
@@ -108,8 +220,26 @@ class MaxPool(object):
         ####################################################################
         # TODO: Implement the max-pooling forward pass                     #
         ####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        pool_height = pool_param['pool_height']
+        pool_width = pool_param['pool_width']
+        stride = pool_param['stride']
+        N, C, H, W = x.shape
+        H_out = 1 + (H - pool_height) // stride
+        W_out = 1 + (W - pool_width) // stride
+        
+        # 使用 unfold 提取滑动窗口
+        x_windows = x.unfold(2, pool_height, stride).unfold(3, pool_width, stride)
+
+        # 调整维度顺序，准备展平
+        x_windows = x_windows.permute(0, 1, 2, 3, 4, 5).contiguous()
+
+        # 展平为矩阵: (N, C, H_out, W_out, pool_height * pool_width)
+        x_cols = x_windows.view(N, C, H_out, W_out, -1)
+
+        # 取最大值
+        out, _ = x_cols.max(dim=4)
+
         ####################################################################
         #                         END OF YOUR CODE                         #
         ####################################################################
@@ -130,8 +260,38 @@ class MaxPool(object):
         #####################################################################
         # TODO: Implement the max-pooling backward pass                     #
         #####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        x, pool_param = cache
+        pool_height = pool_param['pool_height']
+        pool_width = pool_param['pool_width']
+        stride = pool_param['stride']
+        N, C, H, W = x.shape
+        H_out = 1 + (H - pool_height) // stride
+        W_out = 1 + (W - pool_width) // stride
+        dx = torch.zeros_like(x)
+
+        # 使用 unfold 提取滑动窗口
+        # 形状: (N, C, H_out, W_out, pool_height, pool_width)
+        x_windows = x.unfold(2, pool_height, stride).unfold(3, pool_width, stride)
+        x_windows = x_windows.permute(0, 1, 2, 3, 4, 5).contiguous()
+        # 展平为矩阵: (N, C, H_out, W_out, pool_height * pool_width)
+        x_cols = x_windows.view(N, C, H_out, W_out, -1)
+
+        # 找到最大值的索引
+        max_indices = x_cols.argmax(dim=4)
+        # 遍历每个位置，将梯度传递回去
+        for n in range(N):
+            for c in range(C):
+                for h in range(H_out):
+                    for w in range(W_out):
+                        max_index = max_indices[n, c, h, w]
+                        h_start = h * stride
+                        w_start = w * stride
+                        # 计算最大值在原始输入中的位置，由于是展平的索引，需要转换回二维位置，对行列分别进行整除和取模运算
+                        h_index = h_start + (max_index // pool_width)
+                        w_index = w_start + (max_index % pool_width)
+                        dx[n, c, h_index, w_index] += dout[n, c, h, w]
+        
         ####################################################################
         #                          END OF YOUR CODE                        #
         ####################################################################
@@ -193,8 +353,28 @@ class ThreeLayerConvNet(object):
         # **the width and height of the input are preserved**. Take a        #
         # look at the start of the loss() function to see how that happens.  #
         ######################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        C, H, W = input_dims
+        F = num_filters
+        HH = filter_size
+        WW = filter_size
+
+        # Conv layer params
+        self.params['W1'] = weight_scale * torch.randn(F, C, HH, WW, dtype=dtype, device=device)
+        self.params['b1'] = torch.zeros(F, dtype=dtype, device=device)
+
+        # After conv-relu-pool, the feature map size is halved
+        H_pool = H // 2
+        W_pool = W // 2
+
+        # Hidden linear layer params
+        self.params['W2'] = weight_scale * torch.randn(F * H_pool * W_pool, hidden_dim, dtype=dtype, device=device)
+        self.params['b2'] = torch.zeros(hidden_dim, dtype=dtype, device=device)
+
+        # Output linear layer params
+        self.params['W3'] = weight_scale * torch.randn(hidden_dim, num_classes, dtype=dtype, device=device)
+        self.params['b3'] = torch.zeros(num_classes, dtype=dtype, device=device)
+
         ######################################################################
         #                            END OF YOUR CODE                        #
         ######################################################################
@@ -242,8 +422,18 @@ class ThreeLayerConvNet(object):
         # Remember you can use functions defined in your implementation      #
         # above                                                              #
         ######################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        # 1. Conv - ReLU - MaxPool
+        pool_out, pool_cache = Conv_ReLU_Pool.forward(X, W1, b1, conv_param, pool_param)
+
+        # 2. Hidden Linear - ReLU
+        N, F, H_pool, W_pool = pool_out.shape
+        pool_out_flat = pool_out.view(N, -1)
+        hidden_out, hidden_cache = Linear_ReLU.forward(pool_out_flat, W2, b2)
+
+        # 3. Output Linear
+        scores, scores_cache = Linear.forward(hidden_out, W3, b3)
+
         ######################################################################
         #                             END OF YOUR CODE                       #
         ######################################################################
@@ -263,8 +453,32 @@ class ThreeLayerConvNet(object):
         # pass the automated tests, make sure that your L2 regularization  #
         # does not include a factor of 0.5                                 #
         ####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        # Compute loss and initial gradient
+        loss, dscores = softmax_loss(scores, y)
+
+        # Add L2 regularization to loss
+        loss += self.reg * (torch.sum(W1 * W1) + torch.sum(W2 * W2) + torch.sum(W3 * W3))
+
+        # Backward pass
+        # 3. Output Linear backward
+        dhidden, dW3, db3 = Linear.backward(dscores, scores_cache)
+
+        # 2. Hidden Linear - ReLU backward
+        dpool_out_flat, dW2, db2 = Linear_ReLU.backward(dhidden, hidden_cache)
+        dpool_out = dpool_out_flat.view(N, F, H_pool, W_pool)
+
+        # 1. Conv - ReLU - MaxPool backward
+        dX, dW1, db1 = Conv_ReLU_Pool.backward(dpool_out, pool_cache)
+
+        # Store gradients
+        grads['W3'] = dW3 + 2 * self.reg * W3
+        grads['b3'] = db3
+        grads['W2'] = dW2 + 2 * self.reg * W2
+        grads['b2'] = db2
+        grads['W1'] = dW1 + 2 * self.reg * W1
+        grads['b1'] = db1
+
         ###################################################################
         #                             END OF YOUR CODE                    #
         ###################################################################
@@ -347,8 +561,43 @@ class DeepConvNet(object):
         # Batchnorm scale (gamma) and shift (beta) parameters should be     #
         # initilized to ones and zeros respectively.                        #
         #####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        C, H, W = input_dims
+        in_channels = C
+        for i, F in enumerate(num_filters):
+            # Weights and biases for conv layer
+            if weight_scale == 'kaiming' or weight_initializer == 'kaiming':
+                self.params[f'W{i+1}'] = kaiming_initializer(
+                    in_channels, F, K=3, relu=True, device=device, dtype=dtype)
+            else:
+                self.params[f'W{i+1}'] = weight_scale * torch.randn(
+                    F, in_channels, 3, 3, dtype=dtype, device=device)
+            self.params[f'b{i+1}'] = torch.zeros(F, dtype=dtype, device=device)
+
+            # Batchnorm parameters
+            if self.batchnorm:
+                self.params[f'gamma{i+1}'] = torch.ones(F, dtype=dtype, device=device)
+                self.params[f'beta{i+1}'] = torch.zeros(F, dtype=dtype, device=device)
+
+            # Update in_channels for next layer
+            in_channels = F
+
+            # Update H and W if max pooling is applied
+            if i in max_pools:
+                H //= 2
+                W //= 2
+        
+        # Weights and biases for the final linear layer
+        if weight_scale == 'kaiming' or weight_initializer == 'kaiming':
+            self.params[f'W{self.num_layers}'] = kaiming_initializer(
+                in_channels * H * W, num_classes, relu=False,
+                device=device, dtype=dtype)
+        else:
+            self.params[f'W{self.num_layers}'] = weight_scale * torch.randn(
+                in_channels * H * W, num_classes, dtype=dtype, device=device)
+        self.params[f'b{self.num_layers}'] = torch.zeros(
+            num_classes, dtype=dtype, device=device)
+        
         ################################################################
         #                      END OF YOUR CODE                        #
         ################################################################
@@ -454,8 +703,46 @@ class DeepConvNet(object):
         # max pooling layers, or the convolutional sandwich     #
         # layers, to simplify your implementation.              #
         #########################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        # Forward pass through L-1 macro layers
+        caches = []
+        for i in range(self.num_layers - 1):
+            W = self.params[f'W{i+1}']
+            b = self.params[f'b{i+1}']
+
+            if i in self.max_pools:
+                if self.batchnorm:
+                    gamma = self.params[f'gamma{i+1}']
+                    beta = self.params[f'beta{i+1}']
+                    X, cache = Conv_BatchNorm_ReLU_Pool.forward(
+                        X, W, b, gamma, beta,
+                        conv_param, pool_param,
+                        self.bn_params[i])
+                else:
+                    X, cache = Conv_ReLU_Pool.forward(
+                        X, W, b,
+                        conv_param, pool_param)
+            else:
+                if self.batchnorm:
+                    gamma = self.params[f'gamma{i+1}']
+                    beta = self.params[f'beta{i+1}']
+                    X, cache = Conv_BatchNorm_ReLU.forward(
+                        X, W, b, gamma, beta,
+                        conv_param,
+                        self.bn_params[i])
+                else:
+                    X, cache = Conv_ReLU.forward(
+                        X, W, b,
+                        conv_param)
+            caches.append(cache)
+        
+        N = X.shape[0]
+        X_flat = X.view(N, -1)
+        W_final = self.params[f'W{self.num_layers}']
+        b_final = self.params[f'b{self.num_layers}']
+        scores, cache = Linear.forward(X_flat, W_final, b_final)
+        caches.append(cache)
+
         #####################################################
         #                 END OF YOUR CODE                  #
         #####################################################
@@ -475,8 +762,52 @@ class DeepConvNet(object):
         # pass the automated tests, make sure that your L2 regularization #
         # does not include a factor of 0.5                                #
         ###################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        # Compute loss and initial gradient
+        loss, dscores = softmax_loss(scores, y)
+
+        # Add L2 regularization to loss
+        for i in range(self.num_layers):
+            W = self.params[f'W{i+1}']
+            loss += self.reg * torch.sum(W * W)
+        
+        # Backward pass through final linear layer
+        dX, dW_final, db_final = Linear.backward(dscores, caches[-1])
+        grads[f'W{self.num_layers}'] = dW_final + 2 * self.reg * W_final
+        grads[f'b{self.num_layers}'] = db_final
+        dX = dX.view_as(X)
+
+        # Backward pass through L-1 macro layers
+        for i in reversed(range(self.num_layers - 1)):
+            W = self.params[f'W{i+1}']
+            b = self.params[f'b{i+1}']
+
+            if i in self.max_pools:
+                if self.batchnorm:
+                    gamma = self.params[f'gamma{i+1}']
+                    beta = self.params[f'beta{i+1}']
+                    dX, dW, db, dgamma, dbeta = Conv_BatchNorm_ReLU_Pool.backward(
+                        dX, caches[i])
+                    grads[f'gamma{i+1}'] = dgamma
+                    grads[f'beta{i+1}'] = dbeta
+                else:
+                    dX, dW, db = Conv_ReLU_Pool.backward(
+                        dX, caches[i])
+            else:
+                if self.batchnorm:
+                    gamma = self.params[f'gamma{i+1}']
+                    beta = self.params[f'beta{i+1}']
+                    dX, dW, db, dgamma, dbeta = Conv_BatchNorm_ReLU.backward(
+                        dX, caches[i])
+                    grads[f'gamma{i+1}'] = dgamma
+                    grads[f'beta{i+1}'] = dbeta
+                else:
+                    dX, dW, db = Conv_ReLU.backward(
+                        dX, caches[i])
+            
+            grads[f'W{i+1}'] = dW + 2 * self.reg * W
+            grads[f'b{i+1}'] = db
+
         #############################################################
         #                       END OF YOUR CODE                    #
         #############################################################
@@ -491,8 +822,10 @@ def find_overfit_parameters():
     # TODO: Change weight_scale and learning_rate so your     #
     # model achieves 100% training accuracy within 30 epochs. #
     ###########################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    weight_scale = 1e-1
+    learning_rate = 1e-3
+
     ###########################################################
     #                       END OF YOUR CODE                  #
     ###########################################################
@@ -506,8 +839,32 @@ def create_convolutional_solver_instance(data_dict, dtype, device):
     # TODO: Train the best DeepConvNet that you can on      #
     # CIFAR-10 within 60 seconds.                           #
     #########################################################
-    # Replace "pass" statement with your code
-    pass
+    
+    model = DeepConvNet(
+        input_dims=(3, 32, 32),
+        num_filters=[32, 64, 128, 128],
+        max_pools=[0, 1, 2, 3],
+        batchnorm=False,
+        num_classes=10,
+        weight_scale='kaiming',
+        reg=1e-3,
+        dtype=dtype,
+        device=device)
+    
+    solver = Solver(
+        model,
+        data_dict,
+        update_rule=adam,
+        optim_config={
+            'learning_rate': 1e-3,
+        },
+        lr_decay=0.95,
+        num_epochs=10,
+        batch_size=128,
+        print_every=100,
+        device=device,
+    )
+
     #########################################################
     #                  END OF YOUR CODE                     #
     #########################################################
@@ -548,8 +905,9 @@ def kaiming_initializer(Din, Dout, K=None, relu=True, device='cpu',
         # The output should be a tensor in the designated size, dtype,    #
         # and device.                                                     #
         ###################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        weight = torch.randn(Din, Dout, dtype=dtype, device=device) * (gain / Din) ** 0.5
+
         ###################################################################
         #                            END OF YOUR CODE                     #
         ###################################################################
@@ -562,8 +920,9 @@ def kaiming_initializer(Din, Dout, K=None, relu=True, device='cpu',
         # The output should be a tensor in the designated size, dtype,    #
         # and device.                                                     #
         ###################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        weight = torch.randn(Dout, Din, K, K, dtype=dtype, device=device) * (gain / (Din * K * K)) ** 0.5
+
         ###################################################################
         #                         END OF YOUR CODE                        #
         ###################################################################
