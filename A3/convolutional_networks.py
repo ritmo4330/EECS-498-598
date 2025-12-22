@@ -716,8 +716,8 @@ class DeepConvNet(object):
                     beta = self.params[f'beta{i+1}']
                     X, cache = Conv_BatchNorm_ReLU_Pool.forward(
                         X, W, b, gamma, beta,
-                        conv_param, pool_param,
-                        self.bn_params[i])
+                        conv_param, self.bn_params[i],
+                        pool_param)
                 else:
                     X, cache = Conv_ReLU_Pool.forward(
                         X, W, b,
@@ -737,7 +737,7 @@ class DeepConvNet(object):
             caches.append(cache)
         
         N = X.shape[0]
-        X_flat = X.view(N, -1)
+        X_flat = X.reshape(N, -1)
         W_final = self.params[f'W{self.num_layers}']
         b_final = self.params[f'b{self.num_layers}']
         scores, cache = Linear.forward(X_flat, W_final, b_final)
@@ -1010,8 +1010,18 @@ class BatchNorm(object):
             # Referencing the original paper                                 #
             # (https://arxiv.org/abs/1502.03167) might prove to be helpful.  #
             ##################################################################
-            # Replace "pass" statement with your code
-            pass
+            
+            sample_mean = x.mean(dim=0)
+            sample_var = x.var(dim=0, unbiased=False)
+            std = torch.sqrt(sample_var + eps)
+            x_hat = (x - sample_mean) / std
+            out = gamma * x_hat + beta
+            
+            running_mean = momentum * running_mean + (1 - momentum) * sample_mean
+            running_var = momentum * running_var + (1 - momentum) * sample_var
+
+            cache = (x, x_hat, sample_mean, std, gamma, beta, eps)
+
             ################################################################
             #                           END OF YOUR CODE                   #
             ################################################################
@@ -1023,8 +1033,12 @@ class BatchNorm(object):
             # normalized data using gamma and beta. Store the result       #
             # in the out variable.                                         #
             ################################################################
-            # Replace "pass" statement with your code
-            pass
+            
+            std = torch.sqrt(running_var + eps)
+            x_hat = (x - running_mean) / std
+            out = gamma * x_hat + beta
+            cache = None  # No need to store cache for test mode
+
             ################################################################
             #                      END OF YOUR CODE                        #
             ################################################################
@@ -1065,8 +1079,18 @@ class BatchNorm(object):
         # might prove to be helpful.                                        #
         # Don't forget to implement train and test mode separately.         #
         #####################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        x, x_hat, sample_mean, std, gamma, beta, eps = cache
+        N = x.shape[0]
+        
+        dgamma = (dout * x_hat).sum(dim=0)
+        dbeta = dout.sum(dim=0)
+        dx_hat = dout * gamma
+        dvar = (-0.5 * (dx_hat * (x - sample_mean)).sum(dim=0)) / (std**3)
+        dmean = (-dx_hat / std).sum(dim=0) + dvar * (-2.0 / N) * (x - sample_mean).sum(dim=0)
+        
+        dx = dx_hat / std + dvar * 2.0 * (x - sample_mean) / N + dmean / N
+        
         #################################################################
         #                      END OF YOUR CODE                         #
         #################################################################
@@ -1098,8 +1122,14 @@ class BatchNorm(object):
         # the inputs in a single statement; our implementation fits on a  #
         # single 80-character line.                                       #
         ###################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        x, x_hat, sample_mean, std, gamma, beta, eps = cache
+        N = x.shape[0]
+        dgamma = (dout * x_hat).sum(dim=0)
+        dbeta = dout.sum(dim=0)
+        dx_hat = dout * gamma
+        dx = (1. / N) * (1. / std) * (N * dx_hat - dx_hat.sum(dim=0) - x_hat * (dx_hat * x_hat).sum(dim=0))
+
         #################################################################
         #                        END OF YOUR CODE                       #
         #################################################################
@@ -1146,8 +1176,12 @@ class SpatialBatchNorm(object):
         # implemented above. Your implementation should be very short; #
         # ours is less than five lines.                                #
         ################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        N, C, H, W = x.shape
+        x_reshaped = x.permute(0, 2, 3, 1).reshape(-1, C)
+        out, cache = BatchNorm.forward(x_reshaped, gamma, beta, bn_param)
+        out = out.reshape(N, H, W, C).permute(0, 3, 1, 2)
+
         ################################################################
         #                       END OF YOUR CODE                       #
         ################################################################
@@ -1177,8 +1211,12 @@ class SpatialBatchNorm(object):
         # implemented above. Your implementation should be very short;  #
         # ours is less than five lines.                                 #
         #################################################################
-        # Replace "pass" statement with your code
-        pass
+        
+        N, C, H, W = dout.shape
+        dout_reshaped = dout.permute(0, 2, 3, 1).reshape(-1, C)
+        dx, dgamma, dbeta = BatchNorm.backward(dout_reshaped, cache)
+        dx = dx.reshape(N, H, W, C).permute(0, 3, 1, 2)
+
         ##################################################################
         #                       END OF YOUR CODE                         #
         ##################################################################
