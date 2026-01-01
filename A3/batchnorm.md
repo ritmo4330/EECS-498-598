@@ -19,13 +19,11 @@
     $$
 
 3. **标准化 (Normalize):**
-   
     $$
     \hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}
     $$
-    
+
 4. **缩放和平移 (Scale and Shift):**
-   
     $$
     y_i = \gamma \hat{x}_i + \beta
     $$
@@ -67,25 +65,22 @@ $$
 $\mu$ 既直接出现在 $\hat{x}$ 的分子中，也通过 $\sigma^2$ 间接影响 $\hat{x}$。
 
 $$
-\frac{\partial L}{\partial \mu} = \sum_{j=1}^N \frac{\partial L}{\partial \hat{x}_j} \frac{\partial \hat{x}_j}{\partial \mu} + \frac{\partial L}{\partial \sigma^2} \frac{\partial \sigma^2}{\partial \mu} 
+\frac{\partial L}{\partial \mu} = \sum_{j=1}^N \frac{\partial L}{\partial \hat{x}_j} \frac{\partial \hat{x}_j}{\partial \mu} + \frac{\partial L}{\partial \sigma^2} \frac{\partial \sigma^2}{\partial \mu}
 $$
 
 1. **第一项** (分子中的 $\mu$):
-   
     $$
     \frac{\partial \hat{x}_j}{\partial \mu} = \frac{-1}{\sqrt{\sigma^2 + \epsilon}}
     $$
-    
     $$
     \sum_{j=1}^N \frac{\partial L}{\partial \hat{x}_j} \frac{\partial \hat{x}_j}{\partial \mu} = \frac{-1}{\sqrt{\sigma^2 + \epsilon}} \sum_{j=1}^N \frac{\partial L}{\partial \hat{x}_j}
     $$
 
 2. **第二项** (通过 $\sigma^2$):
-   
     $$
     \frac{\partial \sigma^2}{\partial \mu} = \frac{1}{N} \sum_{j=1}^N -2(x_j - \mu) = -2 \cdot \frac{1}{N} \sum_{j=1}^N (x_j - \mu) = 0
     $$
-    
+
     (因为 $\sum_{j=1}^N (x_j - \mu) = 0$ )
 
 所以：
@@ -109,29 +104,28 @@ $$
 我们分别计算这三项：
 
 * **Term 1:**
-  
+
     $$
     \frac{\partial \hat{x}_i}{\partial x_i} = \frac{1}{\sqrt{\sigma^2 + \epsilon}}
     $$
-    
     $$
     \text{Term 1} = \frac{\partial L}{\partial \hat{x}_i} \cdot \frac{1}{\sqrt{\sigma^2 + \epsilon}}
     $$
 
 * **Term 2:**
-  
+
     $$
     \frac{\partial \sigma^2}{\partial x_i} = \frac{2(x_i - \mu)}{N}
     $$
-    
+
     代入之前求得的 $\frac{\partial L}{\partial \sigma^2}$：
-    
+
     $$
     \text{Term 2} = \left[ -\frac{1}{2}(\sigma^2 + \epsilon)^{-3/2} \sum_j \frac{\partial L}{\partial \hat{x}_j} (x_j - \mu) \right] \cdot \frac{2(x_i - \mu)}{N}
     $$
-    
+
     利用 $x_j - \mu = \hat{x}_j \sqrt{\sigma^2 + \epsilon}$ 进行替换简化：
-    
+
     $$
     \text{Term 2} = -\frac{1}{N\sqrt{\sigma^2 + \epsilon}} \hat{x}_i \sum_j \left( \frac{\partial L}{\partial \hat{x}_j} \hat{x}_j \right)
     $$
@@ -141,9 +135,9 @@ $$
     $$
     \frac{\partial \mu}{\partial x_i} = \frac{1}{N}
     $$
-    
+
     代入之前求得的 $\frac{\partial L}{\partial \mu}$：
-    
+
     $$
     \text{Term 3} = \frac{1}{N} \left[ \frac{-1}{\sqrt{\sigma^2 + \epsilon}} \sum_j \frac{\partial L}{\partial \hat{x}_j} \right]
     $$
@@ -163,6 +157,8 @@ $$
 $$
 
 ## 3. 对应代码
+
+见 [convolutional_networks.py](./convolutional_networks.py)
 
 ```python
 dx = (1. / N) * (1. / std) * (N * dx_hat - dx_hat.sum(dim=0) - x_hat * (dx_hat * x_hat).sum(dim=0))
