@@ -2,13 +2,13 @@
 
 ## 问题描述
 
-实现一个两层神经网络的反向传播算法，计算交叉熵损失 $L$ 对各个参数的梯度。
+实现一个两层神经网络进行 $C$ 分类的反向传播算法，计算交叉熵损失 $L$ 对各个参数的梯度。
 
 $$
-L = \frac{1}{N}\cdot softmax(scores, y) + \lambda (\|W_1\|^2 + \|W_2\|^2)
+L = \frac{1}{N}\cdot crossEntropy(scores, y) + \lambda (\|W_1\|^2 + \|W_2\|^2)
 $$
 
-其中，$W_1$ 和 $W_2$ 分别是第一层和第二层的权重矩阵，$b_1$ 和 $b_2$ 是偏置向量，$X$ 是输入数据，$scores = ReLU(X\cdot W_1 + b_1)\cdot W_2 + b_2$ 是网络的输出分数，$softmax = -\sum_{i=1}^{N} \ln \left( \frac{e^{s_{y_i}}}{\sum_{j=1}^{C} e^{s_j}} \right)$ 是交叉熵损失函数，$y$ 是标签，$\lambda$ 是正则化系数。
+其中，$W_1$ 和 $W_2$ 分别是第一层和第二层的权重矩阵，$b_1$ 和 $b_2$ 是偏置向量，$X$ 是输入数据，$scores = ReLU(X\cdot W_1 + b_1)\cdot W_2 + b_2$ 是网络的输出分数，$crossEntropy = -\sum_{i=1}^{N} \ln \left( softmax(s_{y_i}) \right) = -\sum_{i=1}^{N} \ln \left( \frac{e^{s_{y_i}}}{\sum_{j=1}^{C} e^{s_j}} \right)$ 是交叉熵损失函数，$y$ 是标签，$\lambda$ 是正则化系数，$i$ 是样本索引。
 
 ## 要求
 
